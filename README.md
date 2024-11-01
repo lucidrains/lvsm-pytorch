@@ -10,6 +10,50 @@ We will focus only on the Decoder-only architecture in this repository.
 
 This paper lines up with <a href="https://openreview.net/forum?id=A8Vuf2e8y6">another</a> from ICLR 2025
 
+## Install
+
+```bash
+$ pip install lvsm-pytorch
+```
+
+## Usage
+
+```python
+import torch
+from lvsm_pytorch.lvsm import LVSM
+
+rays = torch.randn(2, 6, 256, 256)
+images = torch.randn(2, 3, 256, 256)
+
+target_rays = torch.randn(2, 6, 256, 256)
+target_images = torch.randn(2, 3, 256, 256)
+
+model = LVSM(
+    dim = 512,
+    patch_size = 32,
+    depth = 2,
+)
+
+loss = model(
+    input_images = images,
+    input_rays = rays,
+    target_rays = target_rays,
+    target_images = target_images
+)
+
+loss.backward()
+
+# after much training
+
+pred_images = model(
+    input_images = images,
+    input_rays = rays,
+    target_rays = target_rays,
+) # (2, 3, 256, 256)
+
+assert pred_images.shape == target_images.shape
+```
+
 ## Citations
 
 ```bibtex
