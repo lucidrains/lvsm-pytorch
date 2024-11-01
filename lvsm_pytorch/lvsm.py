@@ -30,7 +30,8 @@ class LVSM(Module):
         depth = 12,
         heads = 8,
         dim_head = 64,
-        decoder_kwargs: dict = dict()
+        decoder_kwargs: dict = dict(),
+        perceptual_loss_weight = 0.5    # they use 0.5 for scene-level, 1.0 for object-leve
     ):
         super().__init__()
 
@@ -57,6 +58,8 @@ class LVSM(Module):
             nn.Sigmoid(),
             Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 3)
         )
+
+        self.perceptual_loss_weight = perceptual_loss_weight
 
     def forward(
         self,
