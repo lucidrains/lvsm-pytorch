@@ -12,6 +12,7 @@ import torch.nn.functional as F
 
 from x_transformers import Encoder
 
+import einx
 from einops.layers.torch import Rearrange
 from einops import rearrange, repeat, pack, unpack
 
@@ -157,12 +158,9 @@ class LVSM(Module):
         height_embed = self.height_embed[:height]
         width_embed = self.width_embed[:width]
 
-        input_tokens = input_tokens + rearrange(input_image_embed, 'i d -> i 1 1 d')
-        input_tokens = input_tokens + rearrange(height_embed, 'h d -> h 1 d')
-        input_tokens = input_tokens + width_embed
+        input_tokens = einx.add('b i h w d, i d, h d, w d -> b i h w d', input_tokens, input_image_embed, height_embed, width_embed)
 
-        target_tokens = target_tokens + rearrange(height_embed, 'h d -> h 1 d')
-        target_tokens = target_tokens + width_embed
+        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_tokens, height_embed, width_embed)
 
         # pack dimensions to ready for attending
 
