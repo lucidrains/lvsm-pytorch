@@ -65,7 +65,11 @@ class LVSM(Module):
         heads = 8,
         max_input_images = 32,
         dim_head = 64,
-        decoder_kwargs: dict = dict(),
+        decoder_kwargs: dict = dict(
+            use_rmsnorm = True,
+            add_value_residual = True,
+            ff_glu = True,
+        ),
         perceptual_loss_weight = 0.5    # they use 0.5 for scene-level, 1.0 for object-level
     ):
         super().__init__()
