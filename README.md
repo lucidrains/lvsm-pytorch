@@ -1,5 +1,7 @@
 <img src="./lvsm.png" width="500px"></img>
 
+<img src="./lvsm-finding.png" width="400px"></img>
+
 ## LVSM - Pytorch (wip)
 
 Implementation of [LVSM](https://haian-jin.github.io/projects/LVSM/), Large View Synthesis with Minimal 3d Inductive Bias, from Adobe Research
