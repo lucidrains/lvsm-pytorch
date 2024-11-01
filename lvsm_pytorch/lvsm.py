@@ -15,6 +15,16 @@ from x_transformers import Encoder
 from einops.layers.torch import Rearrange
 from einops import rearrange, repeat, pack, unpack
 
+"""
+ein notation:
+b - batch
+n - sequence
+h - height
+w - width
+c - channels (either 6 for plucker rays or 3 for rgb)
+i - input images
+"""
+
 # functions
 
 def exists(v):
@@ -56,7 +66,7 @@ class LVSM(Module):
         super().__init__()
 
         self.input_to_patch_tokens = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
+            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
             nn.Linear(9 * patch_size ** 2, dim)
         )
 
@@ -108,14 +118,14 @@ class LVSM(Module):
 
     def forward(
         self,
-        input_images: Float['b 3 h w'],
-        input_rays: Float['b 6 h w'],
+        input_images: Float['b i 3 h w'],
+        input_rays: Float['b i 6 h w'],
         target_rays: Float['b 6 h w'],
         target_images: Float['b 3 h w'] | None = None,
         return_loss_breakdown = False
     ):
 
-        input_tokens = self.input_to_patch_tokens(torch.cat((input_images, input_rays), dim = 1))
+        input_tokens = self.input_to_patch_tokens(torch.cat((input_images, input_rays), dim = -3))
 
         target_tokens = self.target_rays_to_patch_tokens(target_rays)
 
