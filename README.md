@@ -2,7 +2,9 @@
 
 ## LVSM - Pytorch (wip)
 
-Implementation of [LVSM](https://haian-jin.github.io/projects/LVSM/), Large View Synthesis with Minimal 3d Inductive Bias
+Implementation of [LVSM](https://haian-jin.github.io/projects/LVSM/), Large View Synthesis with Minimal 3d Inductive Bias, from Adobe Research
+
+We will focus only on the Decoder-only architecture in this repository.
 
 This paper lines up with <a href="https://openreview.net/forum?id=A8Vuf2e8y6">another</a> from ICLR 2025
 
