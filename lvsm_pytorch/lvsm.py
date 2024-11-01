@@ -1,3 +1,6 @@
+from __future__ import annotations
+from lvsm_pytorch.tensor_typing import Float
+
 import torch
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
