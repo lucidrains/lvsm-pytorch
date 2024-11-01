@@ -33,6 +33,9 @@ def exists(v):
 def default(v, d):
     return v if exists(v) else d
 
+def divisible_by(num, den):
+    return (num % den) == 0
+
 def remove_vgg(fn):
     @wraps(fn)
     def inner(self, *args, **kwargs):
@@ -56,23 +59,36 @@ class LVSM(Module):
         self,
         dim,
         *,
+        max_image_size,
         patch_size,
         depth = 12,
         heads = 8,
+        max_input_images = 32,
         dim_head = 64,
         decoder_kwargs: dict = dict(),
         perceptual_loss_weight = 0.5    # they use 0.5 for scene-level, 1.0 for object-level
     ):
         super().__init__()
+        assert divisible_by(max_image_size, patch_size)
+
+        self.width_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
+        self.height_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
+        self.input_image_embed = nn.Parameter(torch.zeros(max_input_images, dim))
+
+        nn.init.normal_(self.width_embed, std = 0.02)
+        nn.init.normal_(self.height_embed, std = 0.02)
+        nn.init.normal_(self.input_image_embed, std = 0.02)
+
+        patch_size_sq = patch_size ** 2
 
         self.input_to_patch_tokens = nn.Sequential(
             Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear(9 * patch_size ** 2, dim)
+            nn.Linear((6 + 3) * patch_size_sq, dim)
         )
 
         self.target_rays_to_patch_tokens = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear(6 * patch_size ** 2, dim)
+            nn.Linear(6 * patch_size_sq, dim)
         )
 
         self.decoder = Encoder(
@@ -84,7 +100,7 @@ class LVSM(Module):
         )
 
         self.target_unpatchify_to_image = nn.Sequential(
-            nn.Linear(dim, 3 * patch_size ** 2),
+            nn.Linear(dim, 3 * patch_size_sq),
             nn.Sigmoid(),
             Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 3)
         )
@@ -128,6 +144,23 @@ class LVSM(Module):
         input_tokens = self.input_to_patch_tokens(torch.cat((input_images, input_rays), dim = -3))
 
         target_tokens = self.target_rays_to_patch_tokens(target_rays)
+
+        # add positional embeddings
+
+        _, num_images, height, width, _ = input_tokens.shape
+
+        input_image_embed = self.input_image_embed[:num_images]
+        height_embed = self.height_embed[:height]
+        width_embed = self.width_embed[:width]
+
+        input_tokens = input_tokens + rearrange(input_image_embed, 'i d -> i 1 1 d')
+        input_tokens = input_tokens + rearrange(height_embed, 'h d -> h 1 d')
+        input_tokens = input_tokens + width_embed
+
+        target_tokens = target_tokens + rearrange(height_embed, 'h d -> h 1 d')
+        target_tokens = target_tokens + width_embed
+
+        # pack dimensions to ready for attending
 
         input_tokens, _ = pack([input_tokens], 'b * d')
         target_tokens, packed_height_width = pack([target_tokens], 'b * d')
