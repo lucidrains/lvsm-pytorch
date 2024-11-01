@@ -54,6 +54,7 @@ class LVSM(Module):
 
         self.target_unpatchify_to_image = nn.Sequential(
             nn.Linear(dim, 3 * patch_size ** 2),
+            nn.Sigmoid(),
             Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 3)
         )
 
