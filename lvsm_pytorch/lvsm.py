@@ -2,6 +2,8 @@ import torch
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
+from x_transformers import Encoder
+
 # functions
 
 def exists(v):
