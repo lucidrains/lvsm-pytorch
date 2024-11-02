@@ -1,5 +1,5 @@
 from __future__ import annotations
-from lvsm_pytorch.tensor_typing import Float
+from lvsm_pytorch.tensor_typing import Float, Int
 
 from functools import wraps
 
@@ -33,6 +33,10 @@ def exists(v):
 
 def default(v, d):
     return v if exists(v) else d
+
+def lens_to_mask(lens: Int['b'], max_length: int):
+    seq = torch.arange(max_length, device = lens.device)
+    return einx.less('b, n -> b n', lens, seq)
 
 def divisible_by(num, den):
     return (num % den) == 0
@@ -143,6 +147,7 @@ class LVSM(Module):
         input_rays: Float['b i 6 h w'],
         target_rays: Float['b 6 h w'],
         target_images: Float['b 3 h w'] | None = None,
+        num_input_images: Int['b'] | None = None,
         return_loss_breakdown = False
     ):
 
@@ -167,15 +172,23 @@ class LVSM(Module):
         input_tokens, _ = pack([input_tokens], 'b * d')
         target_tokens, packed_height_width = pack([target_tokens], 'b * d')
 
-        tokens, packed_shape = pack([input_tokens, target_tokens], 'b * d')
+        tokens, packed_shape = pack([target_tokens, input_tokens], 'b * d')
+
+        # take care of variable number of input images
+
+        mask = None
+
+        if exists(num_input_images):
+            mask = lens_to_mask(num_input_images, num_images + 1) # plus one for target patched rays
+            mask = repeat(mask, 'b i -> b (i hw)', hw = height * width)
 
         # attention
 
-        tokens = self.decoder(tokens)
+        tokens = self.decoder(tokens, mask = mask)
 
         # unpack
 
-        input_tokens, target_tokens = unpack(tokens, packed_shape, 'b * d')
+        target_tokens, input_tokens = unpack(tokens, packed_shape, 'b * d')
 
         # project target tokens out
 
@@ -207,4 +220,3 @@ class LVSM(Module):
             return total_loss
 
         return total_loss, (loss, perceptual_loss)
-
