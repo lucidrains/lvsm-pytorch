@@ -71,6 +71,7 @@ class LVSM(Module):
         max_input_images = 32,
         dim_head = 64,
         channels = 3,
+        rand_input_image_embed = True,
         decoder_kwargs: dict = dict(
             use_rmsnorm = True,
             add_value_residual = True,
@@ -81,6 +82,8 @@ class LVSM(Module):
         super().__init__()
         assert divisible_by(max_image_size, patch_size)
 
+        # positional embeddings
+
         self.width_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
         self.height_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
         self.input_image_embed = nn.Parameter(torch.zeros(max_input_images, dim))
@@ -88,6 +91,10 @@ class LVSM(Module):
         nn.init.normal_(self.width_embed, std = 0.02)
         nn.init.normal_(self.height_embed, std = 0.02)
         nn.init.normal_(self.input_image_embed, std = 0.02)
+
+        self.rand_input_image_embed = rand_input_image_embed
+
+        # raw data to patch tokens for attention
 
         patch_size_sq = patch_size ** 2
 
@@ -168,13 +175,27 @@ class LVSM(Module):
 
         _, num_images, height, width, _ = input_tokens.shape
 
-        input_image_embed = self.input_image_embed[:num_images]
         height_embed = self.height_embed[:height]
         width_embed = self.width_embed[:width]
 
-        input_tokens = einx.add('b i h w d, i d, h d, w d -> b i h w d', input_tokens, input_image_embed, height_embed, width_embed)
+        input_tokens = einx.add('b i h w d, h d, w d -> b i h w d', input_tokens, height_embed, width_embed)
 
         target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_tokens, height_embed, width_embed)
+
+        # add input image embeddings, make it random to prevent overfitting
+
+        if self.rand_input_image_embed:
+            batch, max_num_input_images = input_tokens.shape[0], self.input_image_embed.shape[0]
+
+            randperm = torch.randn((batch, max_num_input_images), device = self.device).argsort(dim = -1)
+            randperm = randperm[:, :num_images]
+
+            rand_input_image_embed = self.input_image_embed[randperm]
+
+            input_tokens = einx.add('b i h w d, b i d -> b i h w d', input_tokens, rand_input_image_embed)
+        else:
+            input_image_embed = self.input_image_embed[:num_images]
+            input_tokens = einx.add('b i h w d, i d -> b i h w d', input_tokens, input_image_embed)
 
         # pack dimensions to ready for attending
 
