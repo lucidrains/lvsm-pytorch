@@ -70,6 +70,7 @@ class LVSM(Module):
         heads = 8,
         max_input_images = 32,
         dim_head = 64,
+        channels = 3,
         decoder_kwargs: dict = dict(
             use_rmsnorm = True,
             add_value_residual = True,
@@ -92,7 +93,7 @@ class LVSM(Module):
 
         self.input_to_patch_tokens = nn.Sequential(
             Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear((6 + 3) * patch_size_sq, dim)
+            nn.Linear((6 + channels) * patch_size_sq, dim)
         )
 
         self.target_rays_to_patch_tokens = nn.Sequential(
@@ -109,15 +110,19 @@ class LVSM(Module):
         )
 
         self.target_unpatchify_to_image = nn.Sequential(
-            nn.Linear(dim, 3 * patch_size_sq),
+            nn.Linear(dim, channels * patch_size_sq),
             nn.Sigmoid(),
-            Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 3)
+            Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = channels)
         )
 
-        self.has_perceptual_loss = perceptual_loss_weight > 0.
+        self.has_perceptual_loss = perceptual_loss_weight > 0. and channels == 3
         self.perceptual_loss_weight = perceptual_loss_weight
 
         self.register_buffer('zero', torch.tensor(0.), persistent = False)
+
+        # for tensor typing
+
+        self._c = channels
 
     @property
     def device(self):
@@ -125,6 +130,10 @@ class LVSM(Module):
 
     @property
     def vgg(self):
+
+        if not self.has_perceptual_loss:
+            return None
+
         if hasattr(self, '_vgg'):
             return self._vgg
 
@@ -143,10 +152,10 @@ class LVSM(Module):
 
     def forward(
         self,
-        input_images: Float['b i 3 h w'],
+        input_images: Float['b i {self._c} h w'],
         input_rays: Float['b i 6 h w'],
         target_rays: Float['b 6 h w'],
-        target_images: Float['b 3 h w'] | None = None,
+        target_images: Float['b {self._c} h w'] | None = None,
         num_input_images: Int['b'] | None = None,
         return_loss_breakdown = False
     ):
