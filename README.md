@@ -64,3 +64,14 @@ assert pred_images.shape == target_images.shape
     url     = {https://api.semanticscholar.org/CorpusID:273507016}
 }
 ```
+
+```bibtex
+@article{Zhang2024CamerasAR,
+    title     = {Cameras as Rays: Pose Estimation via Ray Diffusion},
+    author    = {Jason Y. Zhang and Amy Lin and Moneish Kumar and Tzu-Hsuan Yang and Deva Ramanan and Shubham Tulsiani},
+    journal   = {ArXiv},
+    year      = {2024},
+    volume    = {abs/2402.14817},
+    url       = {https://api.semanticscholar.org/CorpusID:267782978}
+}
+```
