@@ -22,14 +22,15 @@ $ pip install lvsm-pytorch
 import torch
 from lvsm_pytorch import LVSM
 
-rays = torch.randn(2, 6, 256, 256)
-images = torch.randn(2, 3, 256, 256)
+rays = torch.randn(2, 4, 6, 256, 256)
+images = torch.randn(2, 4, 3, 256, 256)
 
 target_rays = torch.randn(2, 6, 256, 256)
 target_images = torch.randn(2, 3, 256, 256)
 
 model = LVSM(
     dim = 512,
+    max_image_size = 256,
     patch_size = 32,
     depth = 2,
 )

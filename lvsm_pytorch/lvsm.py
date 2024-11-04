@@ -41,22 +41,6 @@ def lens_to_mask(lens: Int['b'], max_length: int):
 def divisible_by(num, den):
     return (num % den) == 0
 
-def remove_vgg(fn):
-    @wraps(fn)
-    def inner(self, *args, **kwargs):
-        has_vgg = hasattr(self, '_vgg')
-        if has_vgg:
-            vgg = self._vgg
-            delattr(self, '_vgg')
-
-        out = fn(self, *args, **kwargs)
-
-        if has_vgg:
-            self._vgg = vgg
-
-        return out
-    return inner
-
 # class
 
 class LVSM(Module):
@@ -142,20 +126,14 @@ class LVSM(Module):
             return None
 
         if hasattr(self, '_vgg'):
-            return self._vgg
+            return self._vgg[0]
 
         vgg = torchvision.models.vgg16(pretrained = True)
         vgg.classifier = nn.Sequential(*vgg.classifier[:-2])
-        self._vgg = vgg.to(self.device)
-        return self._vgg
+        vgg.requires_grad_(False)
 
-    @remove_vgg
-    def state_dict(self, *args, **kwargs):
-        return super().state_dict(*args, **kwargs)
-
-    @remove_vgg
-    def load_state_dict(self, *args, **kwargs):
-        return super().load_state_dict(*args, **kwargs)
+        self._vgg = [vgg]
+        return vgg.to(self.device)
 
     def forward(
         self,
@@ -236,6 +214,8 @@ class LVSM(Module):
         perceptual_loss = self.zero
 
         if self.has_perceptual_loss:
+            self.vgg.eval()
+
             target_image_vgg_feats = self.vgg(target_images)
             pred_target_image_vgg_feats = self.vgg(pred_target_images)
 
