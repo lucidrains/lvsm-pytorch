@@ -1,1 +1,1 @@
-from lvsm_pytorch.lvsm import LVSM
+from lvsm_pytorch.lvsm import LVSM, CameraWrapper

@@ -230,3 +230,77 @@ class LVSM(Module):
             return total_loss
 
         return total_loss, (loss, perceptual_loss)
+
+# a wrapper for converting camera in/ex - trinsics into the Plucker 6D representation
+# complete noob in this area, but following figure 2. in https://arxiv.org/html/2402.14817v1
+# feel free to open an issue if you see some obvious error
+
+class CameraWrapper(Module):
+    def __init__(
+        self,
+        lvsm: LVSM
+    ):
+        super().__init__()
+        self.lvsm = lvsm
+
+    def convert_to_plucker_rays(
+        self,
+        intrinsic_rotation: Float['b 3 3'],
+        extrinsic_rotation: Float['b 3 3'],
+        translation: Float['b 3'],
+        uniform_points: Float['b 3 h w'],
+    ) -> Float['b 6 h w']:
+
+        K_inv = intrinsic_rotation.inv()
+
+        direction = einsum(extrinsic_rotation, K_inv, uniform_points, 'b c1 c2, b c1 c0, b c0 h w -> b c2 h w')
+        points = einsum(-extrinsic_rotation, translation, 'b c1 c2, b c1 -> b c2')
+
+        moments = torch.cross(
+            rearrange(points, 'b c -> b c 1 1'),
+            direction,
+            dim = 1
+        )
+
+        return torch.cat((direction, moments), dim = 1)
+
+    def forward(
+        self,
+        input_intrinsic_rotation: Float['b i 3 3'],
+        input_extrinsic_rotation: Float['b i 3 3'],
+        input_translation: Float['b i 3'],
+        input_uniform_points: Float['b i 3 h w'],
+        target_intrinsic_rotation: Float['b 3 3'],
+        target_extrinsic_rotation: Float['b 3 3'],
+        target_translation: Float['b 3'],
+        target_uniform_points: Float['b 3 h w'],
+        input_images: Float['b i {self._c} h w'],
+        target_images: Float['b {self._c} h w'] | None = None,
+        num_input_images: Int['b'] | None = None,
+        return_loss_breakdown = False
+    ):
+
+        intrinsic_rotation, packed_shape = pack([input_intrinsic_rotation, target_intrinsic_rotation], '* i j')
+        extrinsic_rotation, _ = pack([input_extrinsic_rotation, target_extrinsic_rotation], '* i j')
+        translation, _ = pack([input_translation, target_translation], '* j')
+        uniform_points, _ = pack([input_uniform_points, target_uniform_points], '* c h w')
+
+        plucker_rays = self.convert_to_plucker_rays(
+            intrinsic_rotation,
+            extrinsic_rotation,
+            translation,
+            uniform_points
+        )
+
+        input_rays, target_rays = unpack(plucker_rays, packed_shape, '* c h w')
+
+        out = self.lvsm(
+            input_images = input_images,
+            input_rays = input_rays,
+            target_rays = target_rays,
+            target_images = target_images,
+            num_input_images = num_input_images,
+            return_loss_breakdown = return_loss_breakdown
+        )
+
+        return out
