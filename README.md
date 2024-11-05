@@ -100,6 +100,21 @@ loss = model(
 )
 
 loss.backward()
+
+# after much training
+
+pred_target_images = model(
+    input_intrinsic_rotation = input_intrinsic_rotation,
+    input_extrinsic_rotation = input_extrinsic_rotation,
+    input_translation = input_translation,
+    input_uniform_points = input_uniform_points,
+    target_intrinsic_rotation = target_intrinsic_rotation,
+    target_extrinsic_rotation = target_extrinsic_rotation,
+    target_translation = target_translation,
+    target_uniform_points = target_uniform_points,
+    input_images = images,
+)
+
 ```
 
 ## Citations
