@@ -243,6 +243,10 @@ class CameraWrapper(Module):
         super().__init__()
         self.lvsm = lvsm
 
+        # tensor typing
+
+        self._c = lvsm._c
+
     def convert_to_plucker_rays(
         self,
         intrinsic_rotation: Float['b 3 3'],
