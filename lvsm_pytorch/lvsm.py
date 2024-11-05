@@ -14,7 +14,7 @@ from x_transformers import Encoder
 
 import einx
 from einops.layers.torch import Rearrange
-from einops import rearrange, repeat, pack, unpack
+from einops import einsum, rearrange, repeat, pack, unpack
 
 """
 ein notation:
@@ -251,7 +251,7 @@ class CameraWrapper(Module):
         uniform_points: Float['b 3 h w'],
     ) -> Float['b 6 h w']:
 
-        K_inv = intrinsic_rotation.inv()
+        K_inv = torch.linalg.inv(intrinsic_rotation)
 
         direction = einsum(extrinsic_rotation, K_inv, uniform_points, 'b c1 c2, b c1 c0, b c0 h w -> b c2 h w')
         points = einsum(-extrinsic_rotation, translation, 'b c1 c2, b c1 -> b c2')

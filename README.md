@@ -57,6 +57,51 @@ pred_images = model(
 assert pred_images.shape == target_images.shape
 ```
 
+Or from the raw camera intrinsic / extrinsics (please submit an issue or pull request if you see an error. new to view synthesis and out of my depths here)
+
+```python
+import torch
+from lvsm_pytorch.lvsm import LVSM, CameraWrapper
+
+input_intrinsic_rotation = torch.randn(2, 4, 3, 3)
+input_extrinsic_rotation = torch.randn(2, 4, 3, 3)
+input_translation = torch.randn(2, 4, 3)
+input_uniform_points = torch.randn(2, 4, 3, 256, 256)
+
+target_intrinsic_rotation = torch.randn(2, 3, 3)
+target_extrinsic_rotation = torch.randn(2, 3, 3)
+target_translation = torch.randn(2, 3)
+target_uniform_points = torch.randn(2, 3, 256, 256)
+
+images = torch.randn(2, 4, 4, 256, 256)
+target_images = torch.randn(2, 4, 256, 256)
+
+lvsm = LVSM(
+    dim = 512,
+    max_image_size = 256,
+    patch_size = 32,
+    channels = 4,
+    depth = 2,
+)
+
+model = CameraWrapper(lvsm)
+
+loss = model(
+    input_intrinsic_rotation = input_intrinsic_rotation,
+    input_extrinsic_rotation = input_extrinsic_rotation,
+    input_translation = input_translation,
+    input_uniform_points = input_uniform_points,
+    target_intrinsic_rotation = target_intrinsic_rotation,
+    target_extrinsic_rotation = target_extrinsic_rotation,
+    target_translation = target_translation,
+    target_uniform_points = target_uniform_points,
+    input_images = images,
+    target_images = target_images,
+)
+
+loss.backward()
+```
+
 ## Citations
 
 ```bibtex
