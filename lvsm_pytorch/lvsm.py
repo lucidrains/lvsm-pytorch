@@ -235,6 +235,26 @@ class LVSM(Module):
 # complete noob in this area, but following figure 2. in https://arxiv.org/html/2402.14817v1
 # feel free to open an issue if you see some obvious error
 
+def to_plucker_rays(
+    intrinsic_rotation: Float['b 3 3'],
+    extrinsic_rotation: Float['b 3 3'],
+    translation: Float['b 3'],
+    uniform_points: Float['b 3 h w'],
+) -> Float['b 6 h w']:
+
+    K_inv = torch.linalg.inv(intrinsic_rotation)
+
+    direction = einsum(extrinsic_rotation, K_inv, uniform_points, 'b c1 c2, b c1 c0, b c0 h w -> b c2 h w')
+    points = einsum(-extrinsic_rotation, translation, 'b c1 c2, b c1 -> b c2')
+
+    moments = torch.cross(
+        rearrange(points, 'b c -> b c 1 1'),
+        direction,
+        dim = 1
+    )
+
+    return torch.cat((direction, moments), dim = 1)
+
 class CameraWrapper(Module):
     def __init__(
         self,
@@ -246,27 +266,6 @@ class CameraWrapper(Module):
         # tensor typing
 
         self._c = lvsm._c
-
-    def convert_to_plucker_rays(
-        self,
-        intrinsic_rotation: Float['b 3 3'],
-        extrinsic_rotation: Float['b 3 3'],
-        translation: Float['b 3'],
-        uniform_points: Float['b 3 h w'],
-    ) -> Float['b 6 h w']:
-
-        K_inv = torch.linalg.inv(intrinsic_rotation)
-
-        direction = einsum(extrinsic_rotation, K_inv, uniform_points, 'b c1 c2, b c1 c0, b c0 h w -> b c2 h w')
-        points = einsum(-extrinsic_rotation, translation, 'b c1 c2, b c1 -> b c2')
-
-        moments = torch.cross(
-            rearrange(points, 'b c -> b c 1 1'),
-            direction,
-            dim = 1
-        )
-
-        return torch.cat((direction, moments), dim = 1)
 
     def forward(
         self,
@@ -289,7 +288,7 @@ class CameraWrapper(Module):
         translation, _ = pack([input_translation, target_translation], '* j')
         uniform_points, _ = pack([input_uniform_points, target_uniform_points], '* c h w')
 
-        plucker_rays = self.convert_to_plucker_rays(
+        plucker_rays = to_plucker_rays(
             intrinsic_rotation,
             extrinsic_rotation,
             translation,

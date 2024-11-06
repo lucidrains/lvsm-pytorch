@@ -61,7 +61,7 @@ Or from the raw camera intrinsic / extrinsics (please submit an issue or pull re
 
 ```python
 import torch
-from lvsm_pytorch.lvsm import LVSM, CameraWrapper
+from lvsm_pytorch import LVSM, CameraWrapper
 
 input_intrinsic_rotation = torch.randn(2, 4, 3, 3)
 input_extrinsic_rotation = torch.randn(2, 4, 3, 3)
