@@ -56,6 +56,7 @@ class LVSM(Module):
         dim_head = 64,
         channels = 3,
         rand_input_image_embed = True,
+        dropout_input_ray_prob = 0.,
         decoder_kwargs: dict = dict(
             use_rmsnorm = True,
             add_value_residual = True,
@@ -82,15 +83,29 @@ class LVSM(Module):
 
         patch_size_sq = patch_size ** 2
 
-        self.input_to_patch_tokens = nn.Sequential(
+        self.input_images_to_patch_tokens = nn.Sequential(
             Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear((6 + channels) * patch_size_sq, dim)
+            nn.Linear(channels * patch_size_sq, dim)
+        )
+
+        self.input_rays_to_patch_tokens = nn.Sequential(
+            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
+            nn.Linear(6 * patch_size_sq, dim)
         )
 
         self.target_rays_to_patch_tokens = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
             nn.Linear(6 * patch_size_sq, dim)
         )
+
+        # allow for dropping out input rays
+        # to maybe improve transformer 3d understanding from only images
+
+        self.has_dropout_input_ray = dropout_input_ray_prob > 0.
+        self.input_ray_dropout = nn.Dropout(dropout_input_ray_prob) # allow for dropping out the input rays
+
+        self.null_ray_embed = nn.Parameter(torch.zeros(dim))
+        nn.init.normal_(self.null_ray_embed, std = 0.02)
 
         self.decoder = Encoder(
             dim = dim,
@@ -145,7 +160,20 @@ class LVSM(Module):
         return_loss_breakdown = False
     ):
 
-        input_tokens = self.input_to_patch_tokens(torch.cat((input_images, input_rays), dim = -3))
+        input_tokens = self.input_images_to_patch_tokens(input_images)
+
+        input_ray_tokens = self.input_rays_to_patch_tokens(input_rays)
+
+        if self.training and self.has_dropout_input_ray:
+            ones = input_ray_tokens.new_ones(input_rays.shape[:2])
+            dropout_mask = self.input_ray_dropout(ones)
+
+            input_ray_tokens = einx.where(
+                'b i, b i h w d, d -> b i h w d',
+                dropout_mask > 0., input_ray_tokens, self.null_ray_embed
+            )
+
+        input_tokens = input_tokens + input_ray_tokens
 
         target_tokens = self.target_rays_to_patch_tokens(target_rays)
 
