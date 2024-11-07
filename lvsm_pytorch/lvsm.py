@@ -41,6 +41,16 @@ def lens_to_mask(lens: Int['b'], max_length: int):
 def divisible_by(num, den):
     return (num % den) == 0
 
+def pack_with_inverse(t, pattern):
+    packed, ps = pack(t, pattern)
+
+    def unpack_one(to_unpack, unpack_pattern = None):
+        unpack_pattern = default(unpack_pattern, pattern)
+        unpacked = unpack(to_unpack, ps, unpack_pattern)
+        return unpacked
+
+    return packed, unpack_one
+
 # class
 
 class LVSM(Module):
@@ -83,17 +93,12 @@ class LVSM(Module):
 
         patch_size_sq = patch_size ** 2
 
-        self.input_images_to_patch_tokens = nn.Sequential(
-            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
+        self.images_to_patch_tokens = nn.Sequential(
+            Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
             nn.Linear(channels * patch_size_sq, dim)
         )
 
-        self.input_rays_to_patch_tokens = nn.Sequential(
-            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear(6 * patch_size_sq, dim)
-        )
-
-        self.target_rays_to_patch_tokens = nn.Sequential(
+        self.plucker_rays_to_patch_tokens = nn.Sequential(
             Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
             nn.Linear(6 * patch_size_sq, dim)
         )
@@ -160,9 +165,23 @@ class LVSM(Module):
         return_loss_breakdown = False
     ):
 
-        input_tokens = self.input_images_to_patch_tokens(input_images)
+        # get input image tokens
 
-        input_ray_tokens = self.input_rays_to_patch_tokens(input_rays)
+        input_images, unpack_images_batch = pack_with_inverse([input_images], '* c h w')
+
+        input_image_tokens = self.images_to_patch_tokens(input_images)
+
+        input_image_tokens, = unpack_images_batch(input_image_tokens)
+
+        # get both input and target plucker ray based tokens
+
+        rays, unpack_input_target = pack_with_inverse([input_rays, target_rays], '* c h w')
+
+        ray_tokens = self.plucker_rays_to_patch_tokens(rays)
+
+        input_ray_tokens, target_ray_tokens = unpack_input_target(ray_tokens)
+
+        # maybe dropout input rays
 
         if self.training and self.has_dropout_input_ray:
             ones = input_ray_tokens.new_ones(input_rays.shape[:2])
@@ -173,9 +192,9 @@ class LVSM(Module):
                 dropout_mask > 0., input_ray_tokens, self.null_ray_embed
             )
 
-        input_tokens = input_tokens + input_ray_tokens
+        # input tokens have summed contribution from image + rays
 
-        target_tokens = self.target_rays_to_patch_tokens(target_rays)
+        input_tokens = input_image_tokens + input_ray_tokens
 
         # add positional embeddings
 
@@ -186,7 +205,7 @@ class LVSM(Module):
 
         input_tokens = einx.add('b i h w d, h d, w d -> b i h w d', input_tokens, height_embed, width_embed)
 
-        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_tokens, height_embed, width_embed)
+        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_ray_tokens, height_embed, width_embed)
 
         # add input image embeddings, make it random to prevent overfitting
 
@@ -206,9 +225,9 @@ class LVSM(Module):
         # pack dimensions to ready for attending
 
         input_tokens, _ = pack([input_tokens], 'b * d')
-        target_tokens, packed_height_width = pack([target_tokens], 'b * d')
+        target_tokens, unpack_height_width = pack_with_inverse([target_tokens], 'b * d')
 
-        tokens, packed_shape = pack([target_tokens, input_tokens], 'b * d')
+        tokens, unpack_target_input_tokens = pack_with_inverse([target_tokens, input_tokens], 'b * d')
 
         # take care of variable number of input images
 
@@ -224,11 +243,11 @@ class LVSM(Module):
 
         # unpack
 
-        target_tokens, input_tokens = unpack(tokens, packed_shape, 'b * d')
+        target_tokens, input_tokens = unpack_target_input_tokens(tokens)
 
         # project target tokens out
 
-        target_tokens, = unpack(target_tokens, packed_height_width, 'b * d')
+        target_tokens, = unpack_height_width(target_tokens)
 
         # project back to image
 
