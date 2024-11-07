@@ -112,6 +112,9 @@ class LVSM(Module):
         self.null_ray_embed = nn.Parameter(torch.zeros(dim))
         nn.init.normal_(self.null_ray_embed, std = 0.02)
 
+        self.null_image_embed = nn.Parameter(torch.zeros(dim))
+        nn.init.normal_(self.null_image_embed, std = 0.02)
+
         self.decoder = Encoder(
             dim = dim,
             depth = depth,
@@ -196,6 +199,8 @@ class LVSM(Module):
 
         input_tokens = input_image_tokens + input_ray_tokens
 
+        target_tokens = target_ray_tokens + self.null_image_embed
+
         # add positional embeddings
 
         _, num_images, height, width, _ = input_tokens.shape
@@ -205,7 +210,7 @@ class LVSM(Module):
 
         input_tokens = einx.add('b i h w d, h d, w d -> b i h w d', input_tokens, height_embed, width_embed)
 
-        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_ray_tokens, height_embed, width_embed)
+        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_tokens, height_embed, width_embed)
 
         # add input image embeddings, make it random to prevent overfitting
 
