@@ -506,24 +506,24 @@ class LVSM(Module):
 # feel free to open an issue if you see some obvious error
 
 def to_plucker_rays(
-    intrinsic_rotation: Float['b 3 3'],
-    extrinsic_rotation: Float['b 3 3'],
-    translation: Float['b 3'],
-    uniform_points: Float['b 3 h w'],
-) -> Float['b 6 h w']:
+    intrinsic_rotation: Float['... 3 3'],
+    extrinsic_rotation: Float['... 3 3'],
+    translation: Float['... 3'],
+    uniform_points: Float['... 3 h w'],
+) -> Float['... 6 h w']:
 
     K_inv = torch.linalg.inv(intrinsic_rotation)
 
-    direction = einsum(extrinsic_rotation, K_inv, uniform_points, 'b c1 c2, b c1 c0, b c0 h w -> b c2 h w')
-    points = einsum(-extrinsic_rotation, translation, 'b c1 c2, b c1 -> b c2')
+    direction = einsum(extrinsic_rotation, K_inv, uniform_points, '... c1 c2, ... c1 c0, ... c0 h w -> ... c2 h w')
+    points = einsum(-extrinsic_rotation, translation, '... c1 c2, ... c1 -> ... c2')
 
     moments = torch.cross(
-        rearrange(points, 'b c -> b c 1 1'),
+        rearrange(points, '... c -> ... c 1 1'),
         direction,
-        dim = 1
+        dim = -3
     )
 
-    return torch.cat((direction, moments), dim = 1)
+    return torch.cat((direction, moments), dim = -3)
 
 class CameraWrapper(Module):
     def __init__(
@@ -574,6 +574,45 @@ class CameraWrapper(Module):
             target_images = target_images,
             num_input_images = num_input_images,
             return_loss_breakdown = return_loss_breakdown
+        )
+
+        return out
+
+class MAECameraWrapper(Module):
+    def __init__(
+        self,
+        mae: MAE
+    ):
+        super().__init__()
+        self.mae = mae
+
+        # tensor typing
+
+        self._c = mae._c
+
+    def forward(
+        self,
+        intrinsic_rotation: Float['b i 3 3'],
+        extrinsic_rotation: Float['b i 3 3'],
+        translation: Float['b i 3'],
+        uniform_points: Float['b i 3 h w'],
+        images: Float['b i {self._c} h w'],
+        num_images: Int['b'] | None = None,
+        **kwargs
+    ):
+
+        rays = to_plucker_rays(
+            intrinsic_rotation,
+            extrinsic_rotation,
+            translation,
+            uniform_points
+        )
+
+        out = self.mae(
+            images = images,
+            rays = rays,
+            num_images = num_images,
+            **kwargs
         )
 
         return out

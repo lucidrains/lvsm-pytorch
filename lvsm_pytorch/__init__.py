@@ -1,6 +1,7 @@
 from lvsm_pytorch.lvsm import (
     LVSM,
-    MAE,
     CameraWrapper,
+    MAE,
+    MAECameraWrapper,
     to_plucker_rays
 )

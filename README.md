@@ -156,6 +156,47 @@ ssl_loss.backward()
 # do the above in a loop on a huge amount of data
 ```
 
+Above with camera in/extrsinsics
+
+```python
+import torch
+
+from lvsm_pytorch.lvsm import (
+    LVSM,
+    MAE,
+    MAECameraWrapper
+)
+
+intrinsic_rotation = torch.randn(2, 4, 3, 3)
+extrinsic_rotation = torch.randn(2, 4, 3, 3)
+translation = torch.randn(2, 4, 3)
+uniform_points = torch.randn(2, 4, 3, 256, 256)
+
+images = torch.randn(2, 4, 4, 256, 256)
+
+lvsm = LVSM(
+    dim = 512,
+    max_image_size = 256,
+    patch_size = 32,
+    channels = 4,
+    depth = 2,
+)
+
+mae = MAE(lvsm)
+
+model = MAECameraWrapper(mae)
+
+loss = model(
+    intrinsic_rotation = intrinsic_rotation,
+    extrinsic_rotation = extrinsic_rotation,
+    translation = translation,
+    uniform_points = uniform_points,
+    images = images,
+)
+
+loss.backward()
+```
+
 ## Citations
 
 ```bibtex
