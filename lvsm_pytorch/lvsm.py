@@ -56,7 +56,7 @@ def pack_with_inverse(t, pattern):
 
     return packed, unpack_one
 
-def init_embed(shape):
+def create_and_init_embed(shape):
     params = nn.Parameter(torch.zeros(shape))
     nn.init.normal_(params, std = 0.02)
     return params
@@ -90,9 +90,9 @@ class ImageAndPluckerRayEncoder(Module):
 
         # positional embeddings
 
-        self.width_embed = init_embed((max_image_size // patch_size, dim))
-        self.height_embed = init_embed((max_image_size // patch_size, dim))
-        self.input_image_embed = init_embed((max_input_images, dim))
+        self.width_embed = create_and_init_embed((max_image_size // patch_size, dim))
+        self.height_embed = create_and_init_embed((max_image_size // patch_size, dim))
+        self.input_image_embed = create_and_init_embed((max_input_images, dim))
 
         self.rand_input_image_embed = rand_input_image_embed
 
@@ -110,8 +110,8 @@ class ImageAndPluckerRayEncoder(Module):
             nn.Linear(6 * patch_size_sq, dim)
         )
 
-        self.mask_ray_embed = init_embed(dim)
-        self.mask_image_embed = init_embed(dim)
+        self.mask_ray_embed = create_and_init_embed(dim)
+        self.mask_image_embed = create_and_init_embed(dim)
 
         self.decoder = Encoder(
             dim = dim,
@@ -137,8 +137,7 @@ class ImageAndPluckerRayEncoder(Module):
         rays: Float['b i 6 h w'],
         image_mask: Bool['b i'] | None = None,
         ray_mask: Bool['b i'] | None = None,
-        num_images: Int['b'] | None = None,
-        return_loss_breakdown = False
+        num_images: Int['b'] | None = None
     ):
         # get image tokens
 
@@ -202,7 +201,39 @@ class ImageAndPluckerRayEncoder(Module):
 
         return embed
 
-# class
+# improvised masked autoencoder class
+
+class MAE(Module):
+    def __init__(
+        self,
+        lvsm: LVSM,
+        frac_masked = 0.25,                 # 1 in 4 image/ray pair to be masked out. minimum set to 1
+        frac_images_or_ray_masked = 0.5     # for a given image/ray pair that is masked, the proportion of images being masked vs rays (1. would be only images masked, 0. would be only rays masked)
+    ):
+        super().__init__()
+
+        self.lvsm = lvsm
+        patch_size = lvsm.patch_size
+
+        self.frac_masked = frac_masked
+        self.frac_images_or_ray_masked = frac_images_or_ray_masked
+
+        self.unpatchify_to_rays = nn.Sequential(
+            nn.Linear(dim, 6 * patch_size_sq),
+            Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 6)
+        )
+
+        self._c = lvsm._c
+
+    def forward(
+        self,
+        images: Float['b i {self._c} h w'],
+        rays: Float['b i 6 h w'],
+        num_images: Int['b'] | None = None,
+    ):
+        return loss
+
+# main class
 
 class LVSM(Module):
     def __init__(
@@ -228,6 +259,7 @@ class LVSM(Module):
         super().__init__()
         assert divisible_by(max_image_size, patch_size)
 
+        self.patch_size = patch_size
         patch_size_sq = patch_size ** 2
 
         self.input_ray_dropout = nn.Dropout(dropout_input_ray_prob)
