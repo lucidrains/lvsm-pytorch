@@ -208,18 +208,19 @@ class MAE(Module):
         self,
         lvsm: LVSM,
         frac_masked = 0.25,                 # 1 in 4 image/ray pair to be masked out. minimum set to 1
-        frac_images_or_ray_masked = 0.5     # for a given image/ray pair that is masked, the proportion of images being masked vs rays (1. would be only images masked, 0. would be only rays masked)
+        frac_images_to_ray_masked = 0.5,    # for a given image/ray pair that is masked, the proportion of images being masked vs rays (1. would be only images masked, 0. would be only rays masked). they cannot be both masked
     ):
         super().__init__()
 
         self.lvsm = lvsm
+        dim = lvsm.dim
         patch_size = lvsm.patch_size
 
         self.frac_masked = frac_masked
-        self.frac_images_or_ray_masked = frac_images_or_ray_masked
+        self.frac_images_to_ray_masked = frac_images_to_ray_masked
 
         self.unpatchify_to_rays = nn.Sequential(
-            nn.Linear(dim, 6 * patch_size_sq),
+            nn.Linear(dim, 6 * patch_size ** 2),
             Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 6)
         )
 
@@ -230,8 +231,17 @@ class MAE(Module):
         images: Float['b i {self._c} h w'],
         rays: Float['b i 6 h w'],
         num_images: Int['b'] | None = None,
+        return_image_and_ray_recon = False
     ):
-        return loss
+        batch, image_ray_pairs = images.shape[:2]
+
+        tokens = self.lvsm.image_and_ray_encoder(
+            images = images,
+            rays = rays,
+            num_images = num_images
+        )
+
+        return tokens.sum()
 
 # main class
 
@@ -259,6 +269,7 @@ class LVSM(Module):
         super().__init__()
         assert divisible_by(max_image_size, patch_size)
 
+        self.dim = dim
         self.patch_size = patch_size
         patch_size_sq = patch_size ** 2
 
@@ -277,7 +288,7 @@ class LVSM(Module):
             decoder_kwargs = decoder_kwargs
         )
 
-        self.target_unpatchify_to_image = nn.Sequential(
+        self.unpatchify_to_image = nn.Sequential(
             nn.Linear(dim, channels * patch_size_sq),
             nn.Sigmoid(),
             Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = channels)
@@ -370,7 +381,7 @@ class LVSM(Module):
 
         # project back to image
 
-        pred_target_images = self.target_unpatchify_to_image(target_tokens)
+        pred_target_images = self.unpatchify_to_image(target_tokens)
 
         if not exists(target_images):
             return pred_target_images
