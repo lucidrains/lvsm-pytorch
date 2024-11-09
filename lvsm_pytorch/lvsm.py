@@ -289,12 +289,6 @@ class LVSM(Module):
         num_input_images: Int['b'] | None = None,
         return_loss_breakdown = False
     ):
-
-        # if target images not given, assume inferencing
-
-        is_training = exists(target_images)
-        is_inferencing = not is_training
-
         # ray mask, by default attend using all rays, but this may not be true for MAE
 
         batch_num_images_shape = input_images.shape[:2]
@@ -340,7 +334,7 @@ class LVSM(Module):
 
         # extract target tokens
 
-        target_tokens = tokens[:, 0]
+        target_tokens, _ = unpack_input_target(tokens)
 
         # project back to image
 
