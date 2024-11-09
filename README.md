@@ -138,3 +138,14 @@ pred_target_images = model(
     url       = {https://api.semanticscholar.org/CorpusID:267782978}
 }
 ```
+
+```bibtex
+@misc{he2021masked,
+    title   = {Masked Autoencoders Are Scalable Vision Learners}, 
+    author  = {Kaiming He and Xinlei Chen and Saining Xie and Yanghao Li and Piotr Dollár and Ross Girshick},
+    year    = {2021},
+    eprint  = {2111.06377},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CV}
+}
+```

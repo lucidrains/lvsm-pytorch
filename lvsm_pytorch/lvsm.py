@@ -41,6 +41,11 @@ def lens_to_mask(lens: Int['b'], max_length: int):
 def divisible_by(num, den):
     return (num % den) == 0
 
+def pad_at_dim(t, pad: tuple[int, int], *, dim = -1, value = 0.):
+    dims_from_right = (- dim - 1) if dim < 0 else (t.ndim - dim - 1)
+    zeros = ((0, 0) * dims_from_right)
+    return F.pad(t, (*zeros, *pad), value = value)
+
 def pack_with_inverse(t, pattern):
     packed, ps = pack(t, pattern)
 
@@ -50,6 +55,152 @@ def pack_with_inverse(t, pattern):
         return unpacked
 
     return packed, unpack_one
+
+def init_embed(shape):
+    params = nn.Parameter(torch.zeros(shape))
+    nn.init.normal_(params, std = 0.02)
+    return params
+
+# plucker ray transformer encoder
+# it can accept a mask for either dropping out images or rays for a given sample in a batch
+# this is needed to generalize for both supervised and self-supervised learning (MAE from Kaiming He)
+
+class ImageAndPluckerRayEncoder(Module):
+    def __init__(
+        self,
+        dim,
+        *,
+        max_image_size,
+        patch_size,
+        depth = 12,
+        heads = 8,
+        max_input_images = 32,
+        dim_head = 64,
+        channels = 3,
+        rand_input_image_embed = True,
+        dropout_input_ray_prob = 0.,
+        decoder_kwargs: dict = dict(
+            use_rmsnorm = True,
+            add_value_residual = True,
+            ff_glu = True,
+        ),
+    ):
+        super().__init__()
+        assert divisible_by(max_image_size, patch_size)
+
+        # positional embeddings
+
+        self.width_embed = init_embed((max_image_size // patch_size, dim))
+        self.height_embed = init_embed((max_image_size // patch_size, dim))
+        self.input_image_embed = init_embed((max_input_images, dim))
+
+        self.rand_input_image_embed = rand_input_image_embed
+
+        # raw data to patch tokens for attention
+
+        patch_size_sq = patch_size ** 2
+
+        self.images_to_patch_tokens = nn.Sequential(
+            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
+            nn.Linear(channels * patch_size_sq, dim)
+        )
+
+        self.plucker_rays_to_patch_tokens = nn.Sequential(
+            Rearrange('b i c (h p1) (w p2) -> b i h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
+            nn.Linear(6 * patch_size_sq, dim)
+        )
+
+        self.mask_ray_embed = init_embed(dim)
+        self.mask_image_embed = init_embed(dim)
+
+        self.decoder = Encoder(
+            dim = dim,
+            depth = depth,
+            heads = heads,
+            attn_dim_head = dim_head,
+            **decoder_kwargs
+        )
+
+        self.register_buffer('zero', torch.tensor(0.), persistent = False)
+
+        # for tensor typing
+
+        self._c = channels
+
+    @property
+    def device(self):
+        return self.zero.device
+
+    def forward(
+        self,
+        images: Float['b i {self._c} h w'],
+        rays: Float['b i 6 h w'],
+        image_mask: Bool['b i'] | None = None,
+        ray_mask: Bool['b i'] | None = None,
+        num_images: Int['b'] | None = None,
+        return_loss_breakdown = False
+    ):
+        # get image tokens
+
+        image_tokens = self.images_to_patch_tokens(images)
+
+        # get ray tokens
+
+        ray_tokens = self.plucker_rays_to_patch_tokens(rays)
+
+        # take care of masking either image or ray tokens
+
+        if exists(image_mask):
+            image_tokens = einx.where('b i, d, b i h w d -> b i h w d', image_mask, self.mask_image_embed, image_tokens)
+
+        if exists(ray_mask):
+            ray_tokens = einx.where('b i, d, b i h w d -> b i h w d', ray_mask, self.mask_ray_embed, ray_tokens)
+
+        # input tokens have summed contribution from image + rays
+
+        tokens = image_tokens + ray_tokens
+
+        # add positional embeddings
+
+        _, image_ray_pairs, height, width, _ = tokens.shape
+
+        height_embed = self.height_embed[:height]
+        width_embed = self.width_embed[:width]
+
+        tokens = einx.add('b i h w d, h d, w d -> b i h w d', tokens, height_embed, width_embed)
+
+        # add input image embeddings, make it random to prevent overfitting
+
+        if self.rand_input_image_embed:
+            batch, max_num_images = tokens.shape[0], self.input_image_embed.shape[0]
+
+            randperm = torch.randn((batch, max_num_images), device = self.device).argsort(dim = -1)
+            randperm = randperm[:, :image_ray_pairs]
+
+            rand_input_image_embed = self.input_image_embed[randperm]
+
+            tokens = einx.add('b i h w d, b i d -> b i h w d', tokens, rand_input_image_embed)
+        else:
+            input_image_embed = self.input_image_embed[:image_ray_pairs]
+            tokens = einx.add('b i h w d, i d -> b i h w d', tokens, input_image_embed)
+
+        # take care of variable number of input images
+
+        mask = None
+
+        if exists(num_images):
+            mask = lens_to_mask(num_images, image_ray_pairs) # plus one for target patched rays
+            mask = repeat(mask, 'b i -> b (i hw)', hw = height * width)
+
+        # attention
+
+        tokens, inverse_pack = pack_with_inverse([tokens], 'b * d')
+
+        embed = self.decoder(tokens, mask = mask)
+
+        embed, = inverse_pack(embed)
+
+        return embed
 
 # class
 
@@ -77,50 +228,21 @@ class LVSM(Module):
         super().__init__()
         assert divisible_by(max_image_size, patch_size)
 
-        # positional embeddings
-
-        self.width_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
-        self.height_embed = nn.Parameter(torch.zeros(max_image_size // patch_size, dim))
-        self.input_image_embed = nn.Parameter(torch.zeros(max_input_images, dim))
-
-        nn.init.normal_(self.width_embed, std = 0.02)
-        nn.init.normal_(self.height_embed, std = 0.02)
-        nn.init.normal_(self.input_image_embed, std = 0.02)
-
-        self.rand_input_image_embed = rand_input_image_embed
-
-        # raw data to patch tokens for attention
-
         patch_size_sq = patch_size ** 2
 
-        self.images_to_patch_tokens = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear(channels * patch_size_sq, dim)
-        )
+        self.input_ray_dropout = nn.Dropout(dropout_input_ray_prob)
 
-        self.plucker_rays_to_patch_tokens = nn.Sequential(
-            Rearrange('b c (h p1) (w p2) -> b h w (c p1 p2)', p1 = patch_size, p2 = patch_size),
-            nn.Linear(6 * patch_size_sq, dim)
-        )
-
-        # allow for dropping out input rays
-        # to maybe improve transformer 3d understanding from only images
-
-        self.has_dropout_input_ray = dropout_input_ray_prob > 0.
-        self.input_ray_dropout = nn.Dropout(dropout_input_ray_prob) # allow for dropping out the input rays
-
-        self.null_ray_embed = nn.Parameter(torch.zeros(dim))
-        nn.init.normal_(self.null_ray_embed, std = 0.02)
-
-        self.null_image_embed = nn.Parameter(torch.zeros(dim))
-        nn.init.normal_(self.null_image_embed, std = 0.02)
-
-        self.decoder = Encoder(
+        self.image_and_ray_encoder = ImageAndPluckerRayEncoder(
             dim = dim,
+            max_image_size = max_image_size,
+            patch_size = patch_size,
             depth = depth,
             heads = heads,
-            attn_dim_head = dim_head,
-            **decoder_kwargs
+            max_input_images = max_input_images,
+            dim_head = dim_head,
+            channels = channels,
+            rand_input_image_embed = rand_input_image_embed,
+            decoder_kwargs = decoder_kwargs
         )
 
         self.target_unpatchify_to_image = nn.Sequential(
@@ -168,91 +290,57 @@ class LVSM(Module):
         return_loss_breakdown = False
     ):
 
-        # get input image tokens
+        # if target images not given, assume inferencing
 
-        input_images, unpack_images_batch = pack_with_inverse([input_images], '* c h w')
+        is_training = exists(target_images)
+        is_inferencing = not is_training
 
-        input_image_tokens = self.images_to_patch_tokens(input_images)
+        # ray mask, by default attend using all rays, but this may not be true for MAE
 
-        input_image_tokens, = unpack_images_batch(input_image_tokens)
+        batch_num_images_shape = input_images.shape[:2]
 
-        # get both input and target plucker ray based tokens
-
-        rays, unpack_input_target = pack_with_inverse([input_rays, target_rays], '* c h w')
-
-        ray_tokens = self.plucker_rays_to_patch_tokens(rays)
-
-        input_ray_tokens, target_ray_tokens = unpack_input_target(ray_tokens)
+        ray_mask = torch.zeros(batch_num_images_shape, device = self.device, dtype = torch.bool)
+        image_mask = torch.zeros(batch_num_images_shape, device = self.device, dtype = torch.bool)
 
         # maybe dropout input rays
 
-        if self.training and self.has_dropout_input_ray:
-            ones = input_ray_tokens.new_ones(input_rays.shape[:2])
-            dropout_mask = self.input_ray_dropout(ones)
+        dropout_mask = self.input_ray_dropout((~ray_mask).float())
+        ray_mask = dropout_mask == 0.
 
-            input_ray_tokens = einx.where(
-                'b i, b i h w d, d -> b i h w d',
-                dropout_mask > 0., input_ray_tokens, self.null_ray_embed
-            )
+        # target ray will never be masked out
 
-        # input tokens have summed contribution from image + rays
+        ray_mask = F.pad(ray_mask, (1, 0), value = False)
 
-        input_tokens = input_image_tokens + input_ray_tokens
+        # place the target image and ray at the very left-hand side
 
-        target_tokens = target_ray_tokens + self.null_image_embed
+        # add a dummy image for the target image being predicted
+        # target mask will be set to True
 
-        # add positional embeddings
+        images = pad_at_dim(input_images, (1, 0), dim = 1)
+        image_mask = F.pad(image_mask, (1, 0), value = True)
 
-        _, num_images, height, width, _ = input_tokens.shape
+        # get both input and target plucker ray based tokens
 
-        height_embed = self.height_embed[:height]
-        width_embed = self.width_embed[:width]
+        rays, unpack_input_target = pack_with_inverse([target_rays, input_rays], 'b * c h w')
 
-        input_tokens = einx.add('b i h w d, h d, w d -> b i h w d', input_tokens, height_embed, width_embed)
-
-        target_tokens = einx.add('b h w d, h d, w d -> b h w d', target_tokens, height_embed, width_embed)
-
-        # add input image embeddings, make it random to prevent overfitting
-
-        if self.rand_input_image_embed:
-            batch, max_num_input_images = input_tokens.shape[0], self.input_image_embed.shape[0]
-
-            randperm = torch.randn((batch, max_num_input_images), device = self.device).argsort(dim = -1)
-            randperm = randperm[:, :num_images]
-
-            rand_input_image_embed = self.input_image_embed[randperm]
-
-            input_tokens = einx.add('b i h w d, b i d -> b i h w d', input_tokens, rand_input_image_embed)
-        else:
-            input_image_embed = self.input_image_embed[:num_images]
-            input_tokens = einx.add('b i h w d, i d -> b i h w d', input_tokens, input_image_embed)
-
-        # pack dimensions to ready for attending
-
-        input_tokens, _ = pack([input_tokens], 'b * d')
-        target_tokens, unpack_height_width = pack_with_inverse([target_tokens], 'b * d')
-
-        tokens, unpack_target_input_tokens = pack_with_inverse([target_tokens, input_tokens], 'b * d')
-
-        # take care of variable number of input images
-
-        mask = None
+        # add 1 to num_input_images for target
 
         if exists(num_input_images):
-            mask = lens_to_mask(num_input_images, num_images + 1) # plus one for target patched rays
-            mask = repeat(mask, 'b i -> b (i hw)', hw = height * width)
+            num_input_images = num_input_images + 1
 
-        # attention
+        # image and plucker ray encoder
 
-        tokens = self.decoder(tokens, mask = mask)
+        tokens = self.image_and_ray_encoder(
+            images = images,
+            rays = rays,
+            ray_mask = ray_mask,
+            image_mask = image_mask,
+            num_images = num_input_images
+        )
 
-        # unpack
+        # extract target tokens
 
-        target_tokens, input_tokens = unpack_target_input_tokens(tokens)
-
-        # project target tokens out
-
-        target_tokens, = unpack_height_width(target_tokens)
+        target_tokens = tokens[:, 0]
 
         # project back to image
 
