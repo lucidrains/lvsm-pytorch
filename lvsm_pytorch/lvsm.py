@@ -6,7 +6,7 @@ from functools import wraps
 import torchvision
 
 import torch
-from torch import nn
+from torch import nn, is_tensor
 from torch.nn import Module, ModuleList
 import torch.nn.functional as F
 
@@ -36,7 +36,7 @@ def default(v, d):
 
 def lens_to_mask(lens: Int['b'], max_length: int):
     seq = torch.arange(max_length, device = lens.device)
-    return einx.less('b, n -> b n', lens, seq)
+    return einx.less('n, b -> b n', seq, lens)
 
 def divisible_by(num, den):
     return (num % den) == 0
@@ -203,12 +203,43 @@ class ImageAndPluckerRayEncoder(Module):
 
 # improvised masked autoencoder class
 
+def get_mask_subset_prob(
+    mask: Float['b n'],
+    prob: float | Float['b'],
+    min_mask: int = 0,
+    min_keep_mask: int = 0
+):
+    batch, seq, device = *mask.shape, mask.device
+
+    if is_tensor(prob):
+        prob = rearrange(prob, 'b -> b 1')
+
+    total = mask.sum(dim = -1, keepdim = True)
+
+    max_mask = (total - min_keep_mask).clamp(min = 0)
+
+    num_to_mask = (total * prob).long().clamp(min = min_mask)
+    num_to_mask = torch.minimum(num_to_mask, max_mask)
+
+    logits = torch.rand((batch, seq), device = device)
+    logits = logits.masked_fill(~mask, -1)
+
+    randperm = logits.argsort(dim = -1).argsort(dim = -1).float()
+
+    num_padding = (~mask).sum(dim = -1, keepdim = True)
+    randperm -= num_padding
+
+    subset_mask = randperm < num_to_mask
+    subset_mask.masked_fill_(~mask, False)
+    return subset_mask
+
 class MAE(Module):
     def __init__(
         self,
         lvsm: LVSM,
-        frac_masked = 0.25,                 # 1 in 4 image/ray pair to be masked out. minimum set to 1
+        frac_masked = 0.5,                  # 1 in 2 image/ray pair to be masked out. minimum set to 1
         frac_images_to_ray_masked = 0.5,    # for a given image/ray pair that is masked, the proportion of images being masked vs rays (1. would be only images masked, 0. would be only rays masked). they cannot be both masked
+        image_to_ray_loss_weight = 1.
     ):
         super().__init__()
 
@@ -216,32 +247,94 @@ class MAE(Module):
         dim = lvsm.dim
         patch_size = lvsm.patch_size
 
+        assert 0. < frac_masked < 1.
+        assert 0. < frac_images_to_ray_masked < 1.
+
         self.frac_masked = frac_masked
         self.frac_images_to_ray_masked = frac_images_to_ray_masked
 
         self.unpatchify_to_rays = nn.Sequential(
             nn.Linear(dim, 6 * patch_size ** 2),
-            Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 6)
+            Rearrange('... h w (c p1 p2) -> ... c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = 6)
         )
 
         self._c = lvsm._c
+
+        # loss related
+
+        self.image_to_ray_loss_weight = image_to_ray_loss_weight
 
     def forward(
         self,
         images: Float['b i {self._c} h w'],
         rays: Float['b i 6 h w'],
         num_images: Int['b'] | None = None,
-        return_image_and_ray_recon = False
+        return_image_and_ray_recon = False,
+        return_loss_breakdown = False
     ):
-        batch, image_ray_pairs = images.shape[:2]
+        batch, image_ray_pairs, device = *images.shape[:2], images.device
+
+        # first get the full mask - True means sample exists
+
+        if not exists(num_images):
+            mask = torch.ones((batch, image_ray_pairs), device = device, dtype = torch.bool)
+        else:
+            mask = lens_to_mask(num_images, image_ray_pairs)
+            print(mask)
+        assert (mask.sum(dim = -1) > 1).all(), 'need to have at least 2 image / ray to do self supervised learning'
+
+        # get the images / rays to be masked
+
+        image_ray_mask = get_mask_subset_prob(mask, self.frac_masked, min_mask = 1)
+
+        # then determine the image mask vs the ray mask
+
+        image_mask = get_mask_subset_prob(image_ray_mask, self.frac_images_to_ray_masked)
+        ray_mask = image_ray_mask & ~image_mask
+
+        # attention is all you need for 3d understanding w/ overparameterized plucker ray rep
 
         tokens = self.lvsm.image_and_ray_encoder(
             images = images,
             rays = rays,
+            image_mask = image_mask,
+            ray_mask = ray_mask,
             num_images = num_images
         )
 
-        return tokens.sum()
+        # determine loss
+
+        pred_rays = self.unpatchify_to_rays(tokens[ray_mask])
+        pred_images = self.lvsm.unpatchify_to_image(tokens[image_mask])
+
+        image_recon_loss = F.mse_loss(
+            images[image_mask],
+            pred_images,
+            reduction = 'none'
+        )
+
+        ray_recon_loss = F.mse_loss(
+            rays[ray_mask],
+            pred_rays,
+            reduction = 'none'
+        )
+
+        total_loss = torch.cat((image_recon_loss.flatten() * self.image_to_ray_loss_weight, ray_recon_loss.flatten())).mean()
+
+        loss_breakdown = (image_recon_loss, ray_recon_loss)
+
+        recons = ((image_mask, pred_images), (ray_mask, pred_rays))
+
+        if not return_loss_breakdown and not return_image_and_ray_recon:
+            return total_loss
+
+        if return_loss_breakdown and not return_image_and_ray_recon:
+            return total_loss, loss_breakdown
+
+        if not return_loss_breakdown and return_image_and_ray_recon:
+            return total_loss, recons
+
+        return total_loss, (loss_breakdown, recons)
 
 # main class
 
@@ -291,7 +384,7 @@ class LVSM(Module):
         self.unpatchify_to_image = nn.Sequential(
             nn.Linear(dim, channels * patch_size_sq),
             nn.Sigmoid(),
-            Rearrange('b h w (c p1 p2) -> b c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = channels)
+            Rearrange('... h w (c p1 p2) -> ... c (h p1) (w p2)', p1 = patch_size, p2 = patch_size, c = channels)
         )
 
         self.has_perceptual_loss = perceptual_loss_weight > 0. and channels == 3

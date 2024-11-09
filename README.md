@@ -4,7 +4,7 @@
 
 <img src="./plucker-ray.png" width="400px"></img>
 
-## LVSM - Pytorch (wip)
+## LVSM - Pytorch
 
 Implementation of [LVSM](https://haian-jin.github.io/projects/LVSM/), SOTA Large View Synthesis with Minimal 3d Inductive Bias, from Adobe Research
 
@@ -115,6 +115,45 @@ pred_target_images = model(
     input_images = images,
 )
 
+```
+
+For an improvised self-supervised learning using masked autoencoder for reconstructing images and plucker rays, just import <a href="https://arxiv.org/abs/2111.06377">`MAE`</a> first and wrap your `LVSM` instance. Then pass in your images and rays
+
+```python
+import torch
+
+from lvsm_pytorch import (
+    LVSM,
+    MAE
+)
+
+rays = torch.randn(2, 4, 6, 256, 256)
+images = torch.randn(2, 4, 4, 256, 256)
+
+lvsm = LVSM(
+    dim = 512,
+    max_image_size = 256,
+    patch_size = 32,
+    channels = 4,
+    depth = 2,
+    dropout_input_ray_prob = 0.5
+)
+
+mae = MAE(
+    lvsm = lvsm,
+    frac_masked = 0.5,                  # 1 in 2 image/ray pair to be masked out. minimum set to 1
+    frac_images_to_ray_masked = 0.5,    # for a given image/ray pair that is masked, the proportion of images being masked vs rays (1. would be only images masked, 0. would be only rays masked). they cannot be both masked
+    image_to_ray_loss_weight = 1.       # you can weigh the image recon oss differently than ray recon loss
+)
+
+ssl_loss = mae(
+    images,
+    rays
+)
+
+ssl_loss.backward()
+
+# do the above in a loop on a huge amount of data
 ```
 
 ## Citations
