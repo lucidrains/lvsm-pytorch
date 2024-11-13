@@ -423,7 +423,8 @@ class LVSM(Module):
         target_rays: Float['b 6 h w'],
         target_images: Float['b {self._c} h w'] | None = None,
         num_input_images: Int['b'] | None = None,
-        return_loss_breakdown = False
+        return_loss_breakdown = False,
+        return_embed = False
     ):
         # ray mask, by default attend using all rays, but this may not be true for MAE
 
@@ -470,7 +471,12 @@ class LVSM(Module):
 
         # extract target tokens
 
-        target_tokens, _ = unpack_input_target(tokens)
+        target_tokens, input_tokens = unpack_input_target(tokens)
+
+        # allow for returning embeddings (which should contain rich geometric information)
+
+        if return_embed:
+            return target_tokens, input_tokens
 
         # project back to image
 
