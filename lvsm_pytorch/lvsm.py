@@ -78,6 +78,7 @@ class ImageAndPluckerRayEncoder(Module):
         dim_head = 64,
         channels = 3,
         rand_input_image_embed = True,
+        add_axial_pos_emb = False,
         dropout_input_ray_prob = 0.,
         decoder_kwargs: dict = dict(
             use_rmsnorm = True,
@@ -90,8 +91,10 @@ class ImageAndPluckerRayEncoder(Module):
 
         # positional embeddings
 
-        self.width_embed = create_and_init_embed((max_image_size // patch_size, dim))
-        self.height_embed = create_and_init_embed((max_image_size // patch_size, dim))
+        self.add_axial_pos_emb = add_axial_pos_emb
+        self.width_embed = create_and_init_embed((max_image_size // patch_size, dim)) if add_axial_pos_emb else None
+        self.height_embed = create_and_init_embed((max_image_size // patch_size, dim)) if add_axial_pos_emb else None
+
         self.input_image_embed = create_and_init_embed((max_input_images, dim))
 
         self.rand_input_image_embed = rand_input_image_embed
@@ -159,14 +162,16 @@ class ImageAndPluckerRayEncoder(Module):
 
         tokens = image_tokens + ray_tokens
 
-        # add positional embeddings
+        # optionally add axial positional embeddings
 
         _, image_ray_pairs, height, width, _ = tokens.shape
 
-        height_embed = self.height_embed[:height]
-        width_embed = self.width_embed[:width]
+        if self.add_axial_pos_emb:
 
-        tokens = einx.add('b i h w d, h d, w d -> b i h w d', tokens, height_embed, width_embed)
+            height_embed = self.height_embed[:height]
+            width_embed = self.width_embed[:width]
+
+            tokens = einx.add('b i h w d, h d, w d -> b i h w d', tokens, height_embed, width_embed)
 
         # add input image embeddings, make it random to prevent overfitting
 
